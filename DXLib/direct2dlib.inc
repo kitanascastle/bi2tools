@@ -18,6 +18,7 @@
 
 %LISTBOX_MAXOPENSIZE = 10
 
+%DISPLAY_BUTTONBORDER = 1
 
 
 'Prototype for render function
@@ -585,6 +586,10 @@ PROPERTY GET Fonts(nr&) AS IDWriteTextFormat
   PROPERTY = i_pFont(nr&)
 END PROPERTY
 
+PROPERTY GET FontCount AS LONG
+  PROPERTY = i_FontCount
+END PROPERTY
+
 PROPERTY GET FontSize(nr&) AS SINGLE
   PROPERTY = i_fontsize(nr&)
 END PROPERTY
@@ -726,14 +731,27 @@ END METHOD
 'GRAPHIC COLOR cl&, -2
 'GRAPHIC SET FONT font&
 'GRAPHIC PRINT text$, x&, y&, cl&, font&
-METHOD GraphicPrint(t$, BYVAL x!, BYVAL y!, cl&, fnt&)
+METHOD GraphicPrint(BYVAL t$, BYVAL x!, BYVAL y!, cl&, fnt&)
+  ME.GraphicPrintW(t$, x!, y!, cl&, fnt&)
+'  LOCAL tx AS WSTRINGZ*1024
+'  LOCAL renderTargetSize AS D2D1_SIZE_F
+
+'  IF cl& < 0 OR cl& >= i_BrushCount THEN EXIT METHOD
+'  IF fnt& < 0 OR fnt& >= i_FontCount THEN EXIT METHOD
+
+'  tx = t$
+'  renderTargetSize = i_pRenderTarget.GetSize()
+'  i_pRenderTarget.DrawText(tx, LEN(tx), i_pFont(fnt&), i_pID2D1Helper.RectF(x!, y!, renderTargetSize.width, renderTargetSize.height), i_pBrush(cl&), %D2D1_DRAW_TEXT_OPTIONS_NONE, %DWRITE_MEASURING_MODE_NATURAL)
+END METHOD
+
+METHOD GraphicPrintW(BYVAL t AS WSTRING, BYVAL x!, BYVAL y!, cl&, fnt&)
   LOCAL tx AS WSTRINGZ*1024
   LOCAL renderTargetSize AS D2D1_SIZE_F
 
   IF cl& < 0 OR cl& >= i_BrushCount THEN EXIT METHOD
   IF fnt& < 0 OR fnt& >= i_FontCount THEN EXIT METHOD
 
-  tx = t$
+  tx = t
   renderTargetSize = i_pRenderTarget.GetSize()
   i_pRenderTarget.DrawText(tx, LEN(tx), i_pFont(fnt&), i_pID2D1Helper.RectF(x!, y!, renderTargetSize.width, renderTargetSize.height), i_pBrush(cl&), %D2D1_DRAW_TEXT_OPTIONS_NONE, %DWRITE_MEASURING_MODE_NATURAL)
 END METHOD
@@ -742,11 +760,25 @@ END METHOD
 
 'GRAPHIC TEXT SIZE t$ TO width&, height&
 METHOD GraphicTextSize(BYVAL t$, BYVAL fnt&, BYREF textwidth&, BYREF textheight&)
-  LOCAL tx AS WSTRINGZ*1024
+  ME.GraphicTextSizeW(t$, fnt&, textwidth&, textheight&)
+'  LOCAL tx AS WSTRINGZ*1024
+'  LOCAL textLayout AS IDWriteTextLayout
+'  LOCAL textMetrics AS DWRITE_TEXT_METRICS
+
+'  tx = t$
+'  i_pDWriteFactory.CreateTextLayout(tx, LEN(tx), i_pFont(fnt&), 4000, 100, textLayout)
+'  textLayout.GetMetrics(textMetrics)
+'  textwidth& = textMetrics.WidthIncludingTrailingWhitespace
+'  textheight& = textMetrics.height
+'  textLayout = NOTHING
+END METHOD
+
+METHOD GraphicTextSizeW(BYVAL t AS WSTRING, BYVAL fnt&, BYREF textwidth&, BYREF textheight&)
   LOCAL textLayout AS IDWriteTextLayout
   LOCAL textMetrics AS DWRITE_TEXT_METRICS
+  LOCAL tx AS WSTRINGZ*1024
 
-  tx = t$
+  tx = t
   i_pDWriteFactory.CreateTextLayout(tx, LEN(tx), i_pFont(fnt&), 4000, 100, textLayout)
   textLayout.GetMetrics(textMetrics)
   textwidth& = textMetrics.WidthIncludingTrailingWhitespace
@@ -824,13 +856,13 @@ METHOD GraphicLoadGIF(BYVAL f$, BYREF bitmapwidth&, BYREF bitmapheight&, BYREF p
   sorted& = q&\8 AND 1           'color table is sorted
   gctsize& = 3*2^((q& AND 7)+1)  'global color table size
   p& = p&+7
-  IF bpp& <> 8 THEN EXIT METHOD  'only 8 bit color supported
 
   'global color table
   IF gct& <> 0 THEN
     pal$ = MID$(a$, p&, gctsize&)  'color table
     p& = p&+gctsize&
   END IF
+  transparentcolor& = -1
 
   'data blocks
   DO
@@ -1155,8 +1187,50 @@ END METHOD
 
 
 
+' Converts BGR color to HSB
+' Hue: 0-360
+' Saturation: 0-1
+' Brightness: 0-1
+METHOD BGRtoHSB(BYVAL c&, BYREF hue!, BYREF saturation!, BYREF brightness!)
+  LOCAL r!, g!, b!, minvalue!, maxvalue!
+
+  r! = (INT(c&/65536) AND 255)/255
+  g! = (INT(c&/256) AND 255)/255
+  b! = (c& AND 255)/255
+  minvalue! = MIN(r!, g!, b!)
+  maxvalue! = MAX(r!, g!, b!)
+
+  'calculate brightness
+  brightness! = maxvalue!
+
+  'calulate hue
+  IF minvalue! = maxvalue! THEN
+    hue! = 0
+  ELSE
+    IF maxvalue! = r! THEN
+      hue! = (g!-b!)/(maxvalue!-minvalue!)
+    ELSE
+      IF maxvalue! = g! THEN
+        hue! = 2+(b!-r!)/(maxvalue!-minvalue!)
+      ELSE
+        hue! = 4+(r!-g!)/(maxvalue!-minvalue!)
+      END IF
+    END IF
+    hue! = (hue!*60) MOD 360
+    IF hue! < 0 THEN hue! = hue!+360
+  END IF
+
+  'calculate saturation
+  IF maxvalue! = 0 THEN
+    saturation! = 0
+  ELSE
+    saturation! = (maxvalue!-minvalue!)/maxvalue!
+  END IF
+END METHOD
+
+
+
 'Add a DX-Control to the control array
-'METHOD AddControl(cntr AS IDXCONTROL)
 METHOD AddControl(cntr AS IDXCONTROL)
   IF i_ControlCount > UBOUND(i_Controls) THEN REDIM PRESERVE i_Controls(i_ControlCount+%INITIALCONTROLSIZE)
   i_Controls(i_ControlCount) = cntr
@@ -1231,10 +1305,12 @@ END METHOD
 METHOD OnRender(mx&, my&) AS LONG
   LOCAL hr&, i&
 
+  IF IsWindow(i_hWnd) = 0 THEN EXIT METHOD
   hr& = ME.CreateDeviceResources(i_hWnd)
   IF hr& <> %TRUE THEN EXIT METHOD
 
   'if the window is occluded then do not render
+  IF ISNOTHING(i_pRenderTarget) THEN EXIT METHOD
   IF (i_pRenderTarget.CheckWindowState AND %D2D1_WINDOW_STATE_OCCLUDED) <> 0 THEN EXIT METHOD
 
   'begin draw and clear screen
@@ -1259,6 +1335,7 @@ METHOD OnRender(mx&, my&) AS LONG
   NEXT i&
 
   'end draw
+  IF ISNOTHING(i_pRenderTarget) OR IsWindow(i_hWnd) = 0 THEN EXIT METHOD
   hr& = i_pRenderTarget.EndDraw()
   IF hr& = %D2DERR_RECREATE_TARGET THEN
     ME.DiscardDeviceResources
@@ -1317,7 +1394,7 @@ METHOD OnClick(mx&, my&, btn&)
 
   'find visible control at this position and set focus to it
   FOR i& = 0 TO i_ControlCount-1
-    IF i_Controls(i&).Visible <> 0 AND mx& >= i_Controls(i&).XPos AND mx& <= i_Controls(i&).XPos+i_Controls(i&).Width AND my& >= i_Controls(i&).YPos AND my& <= i_Controls(i&).YPos+i_Controls(i&).Height THEN
+    IF i_Controls(i&).Visible <> 0 AND i_Controls(i&).Enabled <> 0 AND mx& >= i_Controls(i&).XPos AND mx& <= i_Controls(i&).XPos+i_Controls(i&).Width AND my& >= i_Controls(i&).YPos AND my& <= i_Controls(i&).YPos+i_Controls(i&).Height THEN
       i_Controls(i&).HasFocus = 1
       i_Controls(i&).OnClick(mx&, my&, btn&)
       EXIT FOR
@@ -1366,26 +1443,28 @@ INSTANCE i_hasfocus AS LONG             'flag if control should receive input (m
 INSTANCE i_maxlength AS LONG            'max input length (edit only)
 INSTANCE i_cursorpos AS LONG            'current cursor position (edit only)
 INSTANCE i_multiline AS LONG            'set to 1 if multi-line edit (edit only)
-INSTANCE i_value AS STRING              'value
+INSTANCE i_value AS WSTRING             'value
 INSTANCE i_maxprogress AS LONG          'maximum progressbar value
 INSTANCE i_curprogress AS LONG          'current progressbar value
 INSTANCE i_maxscroll AS LONG            'maximum scrollbar value
 INSTANCE i_visiblerows AS LONG          'number of rows that fit into the display area (used to calculate the size of the scrollbar drawer)
 INSTANCE i_scrollposition AS LONG       'current scrollbar value
-INSTANCE i_caption AS STRING            'caption
+INSTANCE i_caption AS WSTRING           'caption
 INSTANCE i_font AS LONG                 'font
 INSTANCE i_textcolor AS LONG            'text color
 INSTANCE i_bordercolor AS LONG          'border color
 INSTANCE i_shadowcolor AS LONG          'shadow color
 INSTANCE i_backgroundcolor AS LONG      'background color
 INSTANCE i_highlightcolor AS LONG       'highlight color
+INSTANCE i_disabledcolor AS LONG        'background color for disabled controls
 INSTANCE i_buttondown AS LONG           'set to 1 if the button is down (button + bitmapbutton only)
 INSTANCE i_selecteditem AS LONG         'selected listbox index (listbox + radiogroup only)
 INSTANCE i_itemcount AS LONG            'number of listbox items (listbox + radiogroup only) or number of text lines (multi-line edit)
-INSTANCE i_items() AS STRING            'listbox items (listbox + radiogroup only) or text lines (multi-line edit)
+INSTANCE i_items() AS WSTRING           'listbox items (listbox + radiogroup only) or text lines (multi-line edit)
 INSTANCE i_bitmapindex AS LONG          'Y-position into the texture (bitmapbutton only)
 INSTANCE i_iconwidth AS LONG            'icon width (bitmapbutton only)
 INSTANCE i_iconheight AS LONG           'icon height (bitmapbutton only)
+INSTANCE i_displayflags AS LONG         'display flags
 INSTANCE i_brushhightlight AS LONG      'gradient brush for highlight (progressbar only)
 INSTANCE i_comboboxopen AS LONG         'set to 1 if the combobox is dropped down (listbox only)
 INSTANCE i_vscrollpos AS LONG           'vertical scroll position (multi-line edit only)
@@ -1468,19 +1547,26 @@ PROPERTY SET MaxLength(BYVAL v AS LONG)
   i_maxlength = v
 END PROPERTY
 
-PROPERTY GET Value AS STRING
+PROPERTY GET Value AS WSTRING
   PROPERTY = i_value
 END PROPERTY
-PROPERTY SET Value(BYVAL v AS STRING)
+PROPERTY SET Value(BYVAL v AS WSTRING)
   i_value = v
   IF i_controltype = %CTYPE_EDIT AND i_multiline > 0 THEN ME.EditSetTextLines
 END PROPERTY
 
-PROPERTY GET Caption AS STRING
+PROPERTY GET Caption AS WSTRING
   PROPERTY = i_caption
 END PROPERTY
-PROPERTY SET CAPTION(BYVAL v AS STRING)
+PROPERTY SET CAPTION(BYVAL v AS WSTRING)
   i_caption = v
+END PROPERTY
+
+PROPERTY GET Font AS LONG
+  PROPERTY = i_font
+END PROPERTY
+PROPERTY SET FONT(BYVAL v AS LONG)
+  i_font = v
 END PROPERTY
 
 PROPERTY GET SelectedItem AS LONG
@@ -1494,11 +1580,11 @@ PROPERTY GET ItemCount AS LONG
   PROPERTY = i_itemcount
 END PROPERTY
 
-PROPERTY GET ItemValue(itemNr&) AS STRING
-  LOCAL v$
+PROPERTY GET ItemValue(itemNr&) AS WSTRING
+  LOCAL v$$
 
-  IF itemNr& >= 0 AND itemNr& <= UBOUND(i_items) THEN v$ = i_items(itemNr&)
-  PROPERTY = v$
+  IF itemNr& >= 0 AND itemNr& <= UBOUND(i_items) THEN v$$ = i_items(itemNr&)
+  PROPERTY = v$$
 END PROPERTY
 
 PROPERTY GET CurrentProgress AS LONG
@@ -1536,8 +1622,19 @@ PROPERTY SET VisibleRows(BYVAL v AS LONG)
   i_visiblerows = v
 END PROPERTY
 
+PROPERTY GET TextColor AS LONG
+  PROPERTY = i_textcolor
+END PROPERTY
+PROPERTY SET TextColor(BYVAL v AS LONG)
+  i_textcolor = v
+END PROPERTY
+
 PROPERTY SET HighlightColor(BYVAL v AS LONG)
   i_highlightcolor = v
+END PROPERTY
+
+PROPERTY SET DisabledColor(BYVAL v AS LONG)
+  i_disabledcolor = v
 END PROPERTY
 
 PROPERTY GET ComboboxOpen AS LONG
@@ -1611,11 +1708,11 @@ END METHOD
 
 
 'Initialize the control
-METHOD InitEdit(pd2d AS IDIRECT2D, cpt$, v$, x&, y&, wd&, hg&, maxlen&, fnt&, textcolor&, bordercolor&, backgroundcolor&, vis&)
+METHOD InitEdit(pd2d AS IDIRECT2D, BYVAL cpt$$, BYVAL v$$, x&, y&, wd&, hg&, maxlen&, fnt&, textcolor&, bordercolor&, backgroundcolor&, vis&)
   i_controltype = %CTYPE_EDIT
   ME.D2D = pd2d
-  i_caption = cpt$
-  i_value = v$
+  i_caption = cpt$$
+  i_value = v$$
   ME.XPos = x&
   ME.YPos = y&
   ME.Width = wd&
@@ -1634,32 +1731,32 @@ END METHOD
 
 
 'Initialize the control asc multi-line edit
-METHOD InitEditMultiline(pd2d AS IDIRECT2D, cpt$, v$, x&, y&, wd&, hg&, maxlen&, fnt&, textcolor&, bordercolor&, backgroundcolor&, vis&)
+METHOD InitEditMultiline(pd2d AS IDIRECT2D, BYVAL cpt$$, BYVAL v$$, x&, y&, wd&, hg&, maxlen&, fnt&, textcolor&, bordercolor&, backgroundcolor&, vis&)
   i_multiline = 1
   i_vscrollpos = 0
-  ME.InitEdit(pd2d, cpt$, v$, x&, y&, wd&, hg&, maxlen&, fnt&, textcolor&, bordercolor&, backgroundcolor&, vis&)
+  ME.InitEdit(pd2d, cpt$$, v$$, x&, y&, wd&, hg&, maxlen&, fnt&, textcolor&, bordercolor&, backgroundcolor&, vis&)
   ME.EditSetTextLines
 END METHOD
 
 
 'Populates the text-lines array from the "i_value" property
 METHOD EditSetTextLines
-  LOCAL arraysize&, i&, wd&, hg&, t$
+  LOCAL arraysize&, i&, wd&, hg&, t$$
 
   i_itemcount = 0
   IF i_value = "" THEN EXIT METHOD
 
   'split text into lines
-  t$ = i_value
+  t$$ = i_value
   i& = 1
   arraysize& = 256
   REDIM i_items(arraysize&-1)
-  WHILE i& <= LEN(t$)
-    ME.D2D.GraphicTextSize(LEFT$(t$, i&+1), i_font, wd&, hg&)
-    IF wd& > ME.Width-4 OR ASC(t$, i&) = 13 THEN
-      i_items(i_itemcount) = LEFT$(t$, i&)
+  WHILE i& <= LEN(t$$)
+    ME.D2D.GraphicTextSizeW(LEFT$(t$$, i&+1), i_font, wd&, hg&)
+    IF wd& > ME.Width-4 OR ASC(t$$, i&) = 13 THEN
+      i_items(i_itemcount) = LEFT$(t$$, i&)
       i_itemcount = i_itemcount+1
-      t$ = MID$(t$, i&+1)
+      t$$ = MID$(t$$, i&+1)
       i& = 0
       IF i_itemcount = arraysize& THEN
         arraysize& = arraysize&+256
@@ -1668,7 +1765,7 @@ METHOD EditSetTextLines
     END IF
     i& = i&+1
   WEND
-  i_items(i_itemcount) = t$
+  i_items(i_itemcount) = t$$
   i_itemcount = i_itemcount+1
   REDIM PRESERVE i_items(i_itemcount-1)
 
@@ -1684,27 +1781,27 @@ METHOD OnRenderEdit(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   LOCAL brush AS ID2D1SolidColorBrush
 
   'draw border and background
-  ME.D2D.GraphicBox(ME.XPos, ME.YPos, ME.XPos+ME.Width, ME.YPos+ME.Height, i_bordercolor, i_backgroundcolor)
+  ME.D2D.GraphicBox(ME.XPos, ME.YPos, ME.XPos+ME.Width, ME.YPos+ME.Height, i_bordercolor, IIF&(ME.Enabled = 0, i_disabledcolor, i_backgroundcolor))
 
   'draw caption
   fnt = ME.D2D.Fonts(i_font)
   brush = ME.D2D.Brushes(i_textcolor)
   IF i_caption <> "" THEN
-    ME.D2D.GraphicTextSize(i_caption, i_font, wd&, hg&)
-    ME.D2D.GraphicPrint(i_caption, ME.XPos-wd&-5, ME.YPos+2, i_bordercolor, i_font)
+    ME.D2D.GraphicTextSizeW(i_caption, i_font, wd&, hg&)
+    ME.D2D.GraphicPrintW(i_caption, ME.XPos-wd&-5, ME.YPos+2, i_bordercolor, i_font)
   END IF
 
   ME.D2D.CreateClippingRegion(ME.XPos+1, ME.YPos+1, ME.XPos+ME.Width-2, ME.YPos+ME.Height-2)
   IF i_multiline = 0 THEN
     'draw text (single-line)
     IF i_value <> "" THEN
-      ME.D2D.GraphicTextSize(i_value, i_font, wd&, hg&)
-      ME.D2D.GraphicPrint(i_value, ME.XPos+2, ME.YPos+2, i_textcolor, i_font)
+      ME.D2D.GraphicTextSizeW(i_value, i_font, wd&, hg&)
+      ME.D2D.GraphicPrintW(i_value, ME.XPos+2, ME.YPos+(ME.Height-hg&)/2, i_textcolor, i_font)
     END IF
 
     'draw cursor
     IF ME.HasFocus <> 0 AND (INT(TIMER*2) AND 1) = 0 THEN
-      ME.D2D.GraphicTextSize(LEFT$(i_value, i_cursorpos), i_font, wd&, hg&)
+      ME.D2D.GraphicTextSizeW(LEFT$(i_value, i_cursorpos), i_font, wd&, hg&)
       ME.D2D.GraphicLine(ME.XPos+wd&+2, ME.YPos+2, ME.XPos+wd&+2, ME.YPos+ME.Height-4, i_textcolor)
     END IF
   ELSE
@@ -1712,7 +1809,7 @@ METHOD OnRenderEdit(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
     lineheight! = ME.D2D.FontSize(i_font)*1.6
     maxlines& = ME.Height/lineheight!
     FOR i& = i_vscrollpos TO i_itemcount-1
-      ME.D2D.GraphicPrint(RTRIM$(i_items(i&), CHR$(13)), ME.XPos+2, ME.YPos+2+(i&-i_vscrollpos)*lineheight!, i_textcolor, i_font)
+      ME.D2D.GraphicPrintW(RTRIM$(i_items(i&), CHR$(13)), ME.XPos+2, ME.YPos+2+(i&-i_vscrollpos)*lineheight!, i_textcolor, i_font)
     NEXT i&
 
     'draw cursor
@@ -1722,7 +1819,7 @@ METHOD OnRenderEdit(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
       n& = 0
       WHILE i& < i_itemcount AND n& < i_cursorpos
         IF n&+LEN(RTRIM$(i_items(i&), CHR$(13))) >= i_cursorpos THEN
-          ME.D2D.GraphicTextSize(LEFT$(i_items(i&), i_cursorpos-n&), i_font, wd&, hg&)
+          ME.D2D.GraphicTextSizeW(LEFT$(i_items(i&), i_cursorpos-n&), i_font, wd&, hg&)
           EXIT LOOP
         END IF
         n& = n&+LEN(i_items(i&))
@@ -1740,22 +1837,22 @@ END METHOD
 
 'Processes key press events for the edit control (will be called automatically from the OnKeyPress event of the CDIRECT2D class)
 METHOD OnKeyPressEdit(k$)
-  LOCAL colnr&, rownr&, i&, a$
+  LOCAL colnr&, rownr&, i&, a$$
 
   SELECT CASE k$
   CASE CHR$(3):  'CTRL+C
     IF LEN(i_value) > 0 THEN
-      a$ = i_value
-      REPLACE CHR$(13) WITH CHR$(13,10) IN a$
-      CLIPBOARD SET TEXT a$
+      a$$ = i_value
+      REPLACE CHR$(13) WITH CHR$(13,10) IN a$$
+      CLIPBOARD SET TEXT a$$
     END IF
   CASE CHR$(22):  'CTRL+V
-    CLIPBOARD GET TEXT TO a$
-    REPLACE CHR$(13,10) WITH CHR$(13) IN a$
-    REPLACE CHR$(10) WITH CHR$(13) IN a$
-    IF a$ <> "" AND LEN(i_value)+LEN(a$) <= i_maxlength THEN
-      i_value = LEFT$(i_value, i_cursorpos)+a$+MID$(i_value, i_cursorpos+1)
-      i_cursorpos = i_cursorpos+LEN(a$)
+    CLIPBOARD GET TEXT TO a$$
+    REPLACE CHR$(13,10) WITH CHR$(13) IN a$$
+    REPLACE CHR$(10) WITH CHR$(13) IN a$$
+    IF a$$ <> "" AND LEN(i_value)+LEN(a$$) <= i_maxlength THEN
+      i_value = LEFT$(i_value, i_cursorpos)+a$$+MID$(i_value, i_cursorpos+1)
+      i_cursorpos = i_cursorpos+LEN(a$$)
     END IF
   CASE CHR$(8):  'Backspace
     IF LEN(i_value) > 0 AND i_cursorpos > 0 THEN
@@ -1822,7 +1919,7 @@ END METHOD
 
 'Processes mouse click events
 METHOD OnClickEdit(mx&, my&, btn&)
-  LOCAL x&, i&, wd&, hg&, rownr&, lineheight!, t$
+  LOCAL x&, i&, wd&, hg&, rownr&, lineheight!, t$$
 
   IF btn& <> 2 THEN EXIT METHOD
 
@@ -1835,17 +1932,17 @@ METHOD OnClickEdit(mx&, my&, btn&)
     rownr& = INT((my&-ME.YPos)/lineheight!)
     IF rownr& >= i_itemcount THEN rownr& = i_itemcount-1
     IF rownr& < 0 THEN rownr& = 0
-    t$ = i_items(rownr&)
+    t$$ = i_items(rownr&)
     FOR i& = 0 TO rownr&-1
       i_cursorpos = i_cursorpos+LEN(i_items(i&))
     NEXT i&
   ELSE
-    t$ = i_value
+    t$$ = i_value
   END IF
   'find character position
   x& = ME.XPos
-  FOR i& = LEN(t$) TO 1 STEP -1
-    ME.D2D.GraphicTextSize(LEFT$(t$, i&), i_font, wd&, hg&)
+  FOR i& = LEN(t$$) TO 1 STEP -1
+    ME.D2D.GraphicTextSizeW(LEFT$(t$$, i&), i_font, wd&, hg&)
     IF x&+wd& <= mx& THEN EXIT FOR
   NEXT i&
   i_cursorpos = i_cursorpos+i&
@@ -1888,7 +1985,7 @@ END METHOD
 '==================================================================================================
 
 'Initialize the control
-METHOD InitListbox(pd2d AS IDIRECT2D, x&, y&, wd&, hg&, items$, fnt&, textcolor&, bordercolor&, buttoncolor&, highlightcolor&, itemChangedFunction AS DWORD, vis&)
+METHOD InitListbox(pd2d AS IDIRECT2D, x&, y&, wd&, hg&, BYVAL items$$, fnt&, textcolor&, bordercolor&, buttoncolor&, highlightcolor&, itemChangedFunction AS DWORD, vis&)
   i_controltype = %CTYPE_LISTBOX
   i_callback = itemChangedFunction
   ME.D2D = pd2d
@@ -1905,19 +2002,19 @@ METHOD InitListbox(pd2d AS IDIRECT2D, x&, y&, wd&, hg&, items$, fnt&, textcolor&
   ME.Visible = vis&
   ME.Enabled = 1
 
-  ME.SetItems(items$)
+  ME.SetItems(items$$)
   ME.D2D.AddControl(ME)
 END METHOD
 
 
 'Set listbox items
-METHOD SetItems(items$)
+METHOD SetItems(BYVAL items$$)
   LOCAL i&
 
-  i_itemcount = PARSECOUNT(items$, ";")
+  i_itemcount = PARSECOUNT(items$$, ";")
   REDIM i_items(i_itemcount-1)
   FOR i& = 0 TO i_itemcount-1
-    i_items(i&) = PARSE$(items$, ";", i&+1)
+    i_items(i&) = PARSE$(items$$, ";", i&+1)
   NEXT i&
 
   IF i_selecteditem >= i_itemcount THEN i_selecteditem = 0
@@ -1926,7 +2023,7 @@ END METHOD
 
 'Renders the listbox control (will be called automatically from the OnRender event of the CDIRECT2D class)
 METHOD OnRenderListbox(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
-  LOCAL x&, y&, wd&, hg&, textwidth&, textheight&, cl&, t$
+  LOCAL x&, y&, wd&, hg&, textwidth&, textheight&, cl&, t$$
 
   x& = ME.XPos
   y& = ME.YPos
@@ -1947,15 +2044,15 @@ METHOD OnRenderListbox(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   ME.D2D.GraphicBox(x&+hg&/2+3, y&, x&+wd&-hg&/2-3, y&+hg&, i_bordercolor, -1)
 
   'draw text
-  t$ = TRIM$(i_items(i_selecteditem))
-  ME.D2D.GraphicTextSize(t$, i_font, textwidth&, textheight&)
-  ME.D2D.GraphicPrint(t$, x&+(wd&-textwidth&)/2, y&+(hg-textheight&)/2, i_textcolor, i_font)
+  t$$ = TRIM$(i_items(i_selecteditem))
+  ME.D2D.GraphicTextSizeW(t$$, i_font, textwidth&, textheight&)
+  ME.D2D.GraphicPrintW(t$$, x&+(wd&-textwidth&)/2, y&+(hg-textheight&)/2, i_textcolor, i_font)
 END METHOD
 
 
 'Renders the dropped-down listbox control (will be called automatically from the OnRender event of the CDIRECT2D class)
 METHOD OnRenderListboxOpen(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
-  LOCAL x&, y&, wd&, hg&, maxitems&, textwidth&, textheight&, i&, startpos&, cl&, t$
+  LOCAL x&, y&, wd&, hg&, maxitems&, textwidth&, textheight&, i&, startpos&, cl&, t$$
 
   x& = ME.XPos
   y& = ME.YPos
@@ -1975,9 +2072,9 @@ METHOD OnRenderListboxOpen(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   IF startpos&+maxitems& > i_itemcount THEN startpos& = MAX&(0, i_itemcount-%LISTBOX_MAXOPENSIZE)
   FOR i& = 0 TO %LISTBOX_MAXOPENSIZE-1
     IF startpos&+i& >= i_itemcount THEN EXIT FOR
-    t$ = TRIM$(i_items(startpos&+i&))
-    ME.D2D.GraphicTextSize(t$, i_font, textwidth&, textheight&)
-    ME.D2D.GraphicPrint(t$, x&+(wd&-textwidth&)/2, y&+(hg-textheight&)/2+hg&+hg&*i&, i_textcolor, i_font)
+    t$$ = TRIM$(i_items(startpos&+i&))
+    ME.D2D.GraphicTextSizeW(t$$, i_font, textwidth&, textheight&)
+    ME.D2D.GraphicPrintW(t$$, x&+(wd&-textwidth&)/2, y&+(hg-textheight&)/2+hg&+hg&*i&, i_textcolor, i_font)
   NEXT i&
 END METHOD
 
@@ -2040,7 +2137,7 @@ END METHOD
 
 
 'Initialize the control
-METHOD InitButton(pd2d AS IDIRECT2D, cpt$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, buttoncolor&, highlightcolor&, BYVAL buttonPressedFunction AS DWORD, vis&)
+METHOD InitButton(pd2d AS IDIRECT2D, BYVAL cpt$$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, buttoncolor&, highlightcolor&, BYVAL buttonPressedFunction AS DWORD, vis&)
   LOCAL i&
 
   i_controltype = %CTYPE_BUTTON
@@ -2058,7 +2155,7 @@ METHOD InitButton(pd2d AS IDIRECT2D, cpt$, x&, y&, wd&, hg&, fnt&, textcolor&, b
   i_buttondown = 0
   ME.Visible = vis&
   ME.Enabled = 1
-  i_caption = cpt$
+  i_caption = cpt$$
 
   ME.D2D.AddControl(ME)
 END METHOD
@@ -2079,8 +2176,8 @@ METHOD OnRenderButton(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   ME.D2D.GraphicBox(x&, y&, x&+wd&, y&+hg&, i_bordercolor, cl&)
 
   'draw caption
-  ME.D2D.GraphicTextSize(i_caption, i_font, textwidth&, textheight&)
-  ME.D2D.GraphicPrint(i_caption, x&+wd&/2-textwidth&/2, y&+hg&/2-textheight&/2, i_textcolor, i_font)
+  ME.D2D.GraphicTextSizeW(i_caption, i_font, textwidth&, textheight&)
+  ME.D2D.GraphicPrintW(i_caption, x&+wd&/2-textwidth&/2, y&+hg&/2-textheight&/2, i_textcolor, i_font)
 END METHOD
 
 
@@ -2104,7 +2201,7 @@ END METHOD
 
 'Initialize the control
 'bitmapindex = Y-position into the texture (the 3 bitmaps for each button are all in the same row: normal bitmap at X-position 0, down bitmap at iconwidth, disabled bitmap at iconwidth*2)
-METHOD InitBitmapButton(pd2d AS IDIRECT2D, cpt$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, shadowcolor&, buttoncolor&, highlightcolor&, bitmapindex&, iconwidth&, iconheight&, BYVAL buttonPressedFunction AS DWORD, vis&)
+METHOD InitBitmapButton(pd2d AS IDIRECT2D, BYVAL cpt$$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, shadowcolor&, buttoncolor&, highlightcolor&, bitmapindex&, iconwidth&, iconheight&, displayflags&, BYVAL buttonPressedFunction AS DWORD, vis&)
   LOCAL i&
 
   i_controltype = %CTYPE_BITMAPBUTTON
@@ -2123,10 +2220,11 @@ METHOD InitBitmapButton(pd2d AS IDIRECT2D, cpt$, x&, y&, wd&, hg&, fnt&, textcol
   i_bitmapindex = bitmapindex&  'Y-position in the bitmap-button texture
   i_iconwidth = IIF&(iconwidth& = 0, wd&-2, iconwidth&)
   i_iconheight = IIF&(iconheight& = 0, hg&-2, iconheight&)
+  i_displayflags = displayflags&
   i_buttondown = 0
   ME.Visible = vis&
   ME.Enabled = 1
-  i_caption = cpt$
+  i_caption = cpt$$
 
   ME.D2D.AddControl(ME)
 END METHOD
@@ -2142,23 +2240,27 @@ METHOD OnRenderBitmapButton(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   hg& = ME.Height
 
   'draw border and background
-  cl& = i_backgroundcolor
-  IF mx& >= x& AND mx& <= x&+wd& AND my& >= y& AND my& <= y&+hg& AND i_enabled = 1 THEN cl& = i_highlightcolor
-  ME.D2D.GraphicBox(x&, y&, x&+wd&, y&+hg&, i_bordercolor, cl&)
-  IF i_buttondown = 1 THEN
-    ME.D2D.GraphicLine(x&+1, y&+1, x&+wd&-2, y&+1, i_shadowcolor)
-    ME.D2D.GraphicLine(x&+1, y&+1, x&+1, y&+hg&-2, i_shadowcolor)
+  IF (i_displayflags AND %DISPLAY_BUTTONBORDER) <> 0 THEN
+    cl& = i_backgroundcolor
+    IF mx& >= x& AND mx& <= x&+wd& AND my& >= y& AND my& <= y&+hg& AND i_enabled = 1 THEN cl& = i_highlightcolor
+    ME.D2D.GraphicBox(x&, y&, x&+wd&, y&+hg&, i_bordercolor, cl&)
+    IF i_buttondown = 1 THEN
+      ME.D2D.GraphicLine(x&+1, y&+1, x&+wd&-2, y&+1, i_shadowcolor)
+      ME.D2D.GraphicLine(x&+1, y&+1, x&+1, y&+hg&-2, i_shadowcolor)
+    END IF
   END IF
-
-  'draw caption
-  ME.D2D.GraphicTextSize(i_caption, i_font, textwidth&, textheight&)
-  ME.D2D.GraphicPrint(i_caption, x&+wd&/2-textwidth&/2+i_buttondown, y&+hg&/2-textheight&/2+i_buttondown, i_textcolor, i_font)
 
   'draw bitmap (there must be 3 bitmaps for the button, all in the same row in the texture)
   srcx& = 0
   IF i_buttondown = 1 THEN srcx& = i_iconwidth
   IF i_enabled = 0 THEN srcx& = i_iconwidth*2
   ME.D2D.GraphicStretch(ME.D2D.BitmapButtonTexture, srcx&, i_bitmapindex, srcx&+i_iconwidth, i_bitmapindex+i_iconheight, x&+2+i_buttondown, y&+2+i_buttondown, x&+wd&+i_buttondown, y&+hg&+i_buttondown)
+
+  'draw caption
+  IF i_caption <> "" THEN
+    ME.D2D.GraphicTextSizeW(i_caption, i_font, textwidth&, textheight&)
+    ME.D2D.GraphicPrintW(i_caption, x&+wd&/2-textwidth&/2+i_buttondown, y&+hg&/2-textheight&/2+i_buttondown, i_textcolor, i_font)
+  END IF
 END METHOD
 
 
@@ -2181,7 +2283,7 @@ END METHOD
 
 
 'Initialize the control
-METHOD InitRadiogroup(pd2d AS IDIRECT2D, x&, y&, wd&, hg&, items$, fnt&, textcolor&, bordercolor&, itemChangedFunction AS DWORD, vis&)
+METHOD InitRadiogroup(pd2d AS IDIRECT2D, x&, y&, wd&, hg&, BYVAL items$$, fnt&, textcolor&, bordercolor&, itemChangedFunction AS DWORD, vis&)
   i_controltype = %CTYPE_RADIOGROUP
   i_callback = itemChangedFunction
   ME.D2D = pd2d
@@ -2195,7 +2297,7 @@ METHOD InitRadiogroup(pd2d AS IDIRECT2D, x&, y&, wd&, hg&, items$, fnt&, textcol
   ME.Visible = vis&
   ME.Enabled = 1
 
-  ME.SetItems(items$)
+  ME.SetItems(items$$)
   ME.D2D.AddControl(ME)
 END METHOD
 
@@ -2221,7 +2323,7 @@ METHOD OnRenderRadiogroup(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   'draw text
   y& = ME.YPos+(rowheight&-diameter&)/2
   FOR i& = 0 TO i_itemcount-1
-    ME.D2D.GraphicPrint(i_items(i&), x&+diameter&+5, y&, i_textcolor, i_font)
+    ME.D2D.GraphicPrintW(i_items(i&), x&+diameter&+5, y&, i_textcolor, i_font)
     y& = y&+rowheight&
   NEXT i&
 END METHOD
@@ -2246,7 +2348,7 @@ END METHOD
 
 
 'Initialize the control
-METHOD InitCheckbox(pd2d AS IDIRECT2D, cpt$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, BYVAL itemChangedFunction AS DWORD, vis&)
+METHOD InitCheckbox(pd2d AS IDIRECT2D, BYVAL cpt$$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, BYVAL itemChangedFunction AS DWORD, vis&)
   LOCAL i&
 
   i_controltype = %CTYPE_CHECKBOX
@@ -2261,7 +2363,7 @@ METHOD InitCheckbox(pd2d AS IDIRECT2D, cpt$, x&, y&, wd&, hg&, fnt&, textcolor&,
   i_bordercolor = bordercolor&
   ME.Visible = vis&
   ME.Enabled = 1
-  i_caption = cpt$
+  i_caption = cpt$$
 
   ME.D2D.AddControl(ME)
 END METHOD
@@ -2280,8 +2382,8 @@ METHOD OnRenderCheckbox(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   IF i_selecteditem <> 0 THEN ME.D2D.GraphicBox(x&+4, y&+4, x&+hg&-3, y&+hg&-3, i_bordercolor, i_bordercolor)
 
   'draw text
-  ME.D2D.GraphicTextSize(i_caption, i_font, textwidth&, textheight&)
-  ME.D2D.GraphicPrint(i_caption, x&+hg&+5, y&+(hg&-textheight&)/2, i_textcolor, i_font)
+  ME.D2D.GraphicTextSizeW(i_caption, i_font, textwidth&, textheight&)
+  ME.D2D.GraphicPrintW(i_caption, x&+hg&+5, y&+(hg&-textheight&)/2, i_textcolor, i_font)
 END METHOD
 
 
@@ -2303,7 +2405,7 @@ END METHOD
 
 
 'Initialize the control
-METHOD InitProgressbar(pd2d AS IDIRECT2D, maxprogress&, cpt$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, backgroundcolor&, barcolor&, vis&)
+METHOD InitProgressbar(pd2d AS IDIRECT2D, maxprogress&, BYVAL cpt$$, x&, y&, wd&, hg&, fnt&, textcolor&, bordercolor&, backgroundcolor&, barcolor&, vis&)
   i_controltype = %CTYPE_PROGRESSBAR
   ME.D2D = pd2d
   ME.XPos = x&
@@ -2318,7 +2420,7 @@ METHOD InitProgressbar(pd2d AS IDIRECT2D, maxprogress&, cpt$, x&, y&, wd&, hg&, 
   i_backgroundcolor = backgroundcolor&
   i_highlightcolor = barcolor&
   ME.Visible = vis&
-  i_caption = cpt$
+  i_caption = cpt$$
 
   ME.D2D.AddControl(ME)
 END METHOD
@@ -2326,7 +2428,7 @@ END METHOD
 
 'Renders the progressbar control (will be called automatically from the OnRender event of the CDIRECT2D class)
 METHOD OnRenderProgressbar(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
-  LOCAL x&, y&, wd&, hg&, textwidth&, textheight&, barlen&, a$
+  LOCAL x&, y&, wd&, hg&, textwidth&, textheight&, barlen&, a$$
 
   x& = ME.XPos
   y& = ME.YPos
@@ -2343,11 +2445,11 @@ METHOD OnRenderProgressbar(RenderTarget AS ID2D1HwndRenderTarget, mx&, my&)
   END IF
 
   'draw text
-  a$ = i_caption
-  REPLACE "%" WITH FORMAT$(INT(100*i_curprogress/i_maxprogress))+"%" IN a$
-  IF a$ <> "" THEN
-    ME.D2D.GraphicTextSize(a$, i_font, textwidth&, textheight&)
-    ME.D2D.GraphicPrint(a$, x&+(wd&-textwidth&)/2, y&+(hg&-textheight&)/2, i_textcolor, i_font)
+  a$$ = i_caption
+  REPLACE "%" WITH FORMAT$(INT(100*i_curprogress/i_maxprogress))+"%" IN a$$
+  IF a$$ <> "" THEN
+    ME.D2D.GraphicTextSizeW(a$$, i_font, textwidth&, textheight&)
+    ME.D2D.GraphicPrintW(a$$, x&+(wd&-textwidth&)/2, y&+(hg&-textheight&)/2, i_textcolor, i_font)
   END IF
 END METHOD
 
